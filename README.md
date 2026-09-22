@@ -1,0 +1,1 @@
+# 协同编辑器项目 - 基于 Vue 3 + FastAPI + WebSocket + SQLite 的实时协同 Block 编辑器

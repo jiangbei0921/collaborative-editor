@@ -1,0 +1,1 @@
+// 纯函数 applyOperation：根据 Operation（insert/delete/update）修改 Document 状态，返回新 Document

@@ -1,0 +1,1 @@
+# DocumentManager：文档加载/创建、版本更新、Block 增删改查协调、文档状态缓存

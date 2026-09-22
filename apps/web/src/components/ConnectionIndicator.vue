@@ -1,0 +1,1 @@
+// WebSocket 连接状态指示器：显示 Connected / Disconnected / Reconnecting / Syncing 四种状态

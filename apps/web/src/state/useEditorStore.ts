@@ -1,0 +1,1 @@
+// 编辑器全局响应式状态（Composition API）：Document、Blocks、操作分发、远程 Operation 合并

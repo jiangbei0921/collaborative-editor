@@ -1,0 +1,1 @@
+// WebSocket 消息协议类型定义：join / document / operation / ack / conflict / error / presence 消息结构

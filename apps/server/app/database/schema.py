@@ -1,0 +1,1 @@
+# 数据库表结构定义：documents 表、blocks 表、operations 表的 DDL 与索引创建

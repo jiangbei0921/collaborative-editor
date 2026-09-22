@@ -1,0 +1,1 @@
+// WebSocket 客户端封装：connect/disconnect/send、消息收发、指数退避重连、连接状态管理

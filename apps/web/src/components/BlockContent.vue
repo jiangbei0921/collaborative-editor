@@ -1,0 +1,1 @@
+// Block 可编辑内容区域：contenteditable 实现文本输入，处理 input/compositionstart/compositionend 等 DOM 事件

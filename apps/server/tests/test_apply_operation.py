@@ -1,0 +1,1 @@
+# apply_operation 纯函数单元测试：insert/delete/update 操作的正确性、边界条件、幂等性

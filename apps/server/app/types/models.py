@@ -1,0 +1,1 @@
+# Pydantic 数据模型定义：Block、Document、Operation、JoinMessage、AckMessage、ConflictMessage 等

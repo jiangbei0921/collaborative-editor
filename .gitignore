@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Database
+*.db
+*.sqlite3
+
+# Build output
+dist/
+.vite/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Lock files (generated)
+package-lock.json
+
+# Logs
+*.log
+npm-debug.log*

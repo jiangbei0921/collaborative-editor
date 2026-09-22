@@ -1,0 +1,1 @@
+# DocumentService：文档业务逻辑层，协调 DocumentManager 与 Repository，提供高层文档操作接口

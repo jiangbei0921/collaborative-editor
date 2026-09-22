@@ -1,0 +1,1 @@
+// 编辑器核心状态管理：Document 当前状态、Blocks、Selection 光标位置、pendingOperations 队列

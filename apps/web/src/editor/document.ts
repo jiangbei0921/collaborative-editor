@@ -1,0 +1,1 @@
+// Document 数据模型：id、version、blocks[]、updatedAt 及工厂函数

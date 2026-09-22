@@ -1,0 +1,1 @@
+# ConnectionManager：维护 documentId -> {client_id: WebSocket} 映射、广播消息、在线状态管理、断线清理

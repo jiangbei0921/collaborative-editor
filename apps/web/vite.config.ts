@@ -1,0 +1,1 @@
+// Vite 构建配置：Vue 插件、开发服务器端口、WebSocket 代理

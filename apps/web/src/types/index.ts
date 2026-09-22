@@ -1,0 +1,1 @@
+// 全局 TypeScript 类型定义：聚合导出 Block、Document、Operation、WebSocketMessage 等类型

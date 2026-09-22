@@ -1,0 +1,1 @@
+# Repository 数据访问层：封装所有 SQLite CRUD 操作（文档/Block/Operation 的增删改查），隔离业务层与 SQL

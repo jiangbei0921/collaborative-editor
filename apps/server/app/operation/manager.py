@@ -1,0 +1,1 @@
+# OperationManager：操作验证、幂等性检查（operationId 去重）、版本冲突检测、ACK 生成、广播协调

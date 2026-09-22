@@ -1,0 +1,1 @@
+// Operation 数据模型：id、clientId、documentId、blockId、type、position、content、length、version 及工厂函数

@@ -1,0 +1,1 @@
+# 双客户端协同集成测试：Client A 编辑 → Server → Client B 实时接收、冲突场景、重连恢复

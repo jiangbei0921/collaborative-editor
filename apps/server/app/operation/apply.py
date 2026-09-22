@@ -1,0 +1,1 @@
+# apply_operation 纯函数：接收 Document + Operation，无副作用地返回修改后的新 Document（insert/delete/update）
