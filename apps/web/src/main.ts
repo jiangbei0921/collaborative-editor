@@ -1,1 +1,6 @@
-// Vue 3 应用入口：创建 App、挂载根组件、注册全局插件
+import { createApp } from "vue"
+import App from "./App.vue"
+import router from "./router"
+import "./style.css"
+
+createApp(App).use(router).mount("#app")

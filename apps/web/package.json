@@ -10,9 +10,11 @@
     "lint": "eslint . --ext .vue,.ts,.tsx"
   },
   "dependencies": {
-    "vue": "^3.5.13"
+    "vue": "^3.5.13",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
+    "@types/node": "^26.6.2",
     "@vitejs/plugin-vue": "^5.2.3",
     "typescript": "~5.7.3",
     "vite": "^6.2.4",
