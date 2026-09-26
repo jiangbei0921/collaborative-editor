@@ -7,6 +7,7 @@ import { usePresenceStore } from "../state/usePresenceStore"
 import { useCursorStore } from "../state/useCursorStore"
 import { WebSocketClient } from "../websocket/WebSocketClient"
 import { buildOperation } from "../websocket/protocol"
+import { getWebSocketBaseUrl } from "../utils/websocketUrl"
 import EditorHeader from "./EditorHeader.vue"
 import EditorContent from "./EditorContent.vue"
 
@@ -255,7 +256,7 @@ function handleDisconnect(): void {
 onMounted(() => {
   setStatus("connecting")
   ws.value = new WebSocketClient(
-    import.meta.env.VITE_WS_URL || "ws://localhost:8000",
+    getWebSocketBaseUrl(),
     clientId,
     docId,
     handleMessage,
@@ -277,7 +278,7 @@ watch(
       clearCursors()
       setStatus("connecting")
       ws.value = new WebSocketClient(
-        import.meta.env.VITE_WS_URL || "ws://localhost:8000",
+        getWebSocketBaseUrl(),
         clientId,
         newId as string,
         handleMessage,
