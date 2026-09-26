@@ -43,10 +43,19 @@ def apply_operation(doc: Document, op: Operation) -> Document:
         doc.blocks[target_index] = block.model_copy(update={"content": new_content})
 
     elif op.type == "create_block":
-        if op.content is None:
-            raise ValueError("Create_block operation requires content (block type)")
-        new_block = Block(id=op.block_id or op.id, type=op.content, content="")
-        doc.blocks.append(new_block)
+        block_type = op.content or "paragraph"
+        new_block_id = op.block_id or op.id
+        new_block = Block(id=new_block_id, type=block_type, content="")
+        if op.after_block_id:
+            after_index = next(
+                (i for i, b in enumerate(doc.blocks) if b.id == op.after_block_id), None
+            )
+            if after_index is not None:
+                doc.blocks.insert(after_index + 1, new_block)
+            else:
+                doc.blocks.append(new_block)
+        else:
+            doc.blocks.append(new_block)
 
     elif op.type == "delete_block":
         if op.block_id is None:

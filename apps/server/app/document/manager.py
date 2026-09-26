@@ -1,8 +1,9 @@
 import time
+import uuid
 from typing import Optional
 
 from app.database.repository import BlockRepository, DocumentRepository
-from app.types.models import Document, Operation, DEFAULT_DOCUMENT_TITLE
+from app.types.models import Block, Document, Operation, DEFAULT_DOCUMENT_TITLE
 from app.operation.apply import apply_operation
 
 
@@ -26,6 +27,9 @@ class DocumentManager:
     @classmethod
     async def create(cls, doc_id: str, title: str = DEFAULT_DOCUMENT_TITLE) -> Document:
         doc = await DocumentRepository.create(doc_id, title)
+        default_block = Block(id=str(uuid.uuid4()), type="paragraph", content="")
+        await BlockRepository.create(default_block, doc_id, 1)
+        doc.blocks = [default_block]
         cls._cache[doc_id] = doc
         return doc
 
@@ -50,8 +54,20 @@ class DocumentManager:
         await DocumentRepository.update_version(doc_id, new_version)
 
         if op.type == "create_block":
-            sort_order = await BlockRepository.get_next_sort_order(doc_id)
-            await BlockRepository.create(new_doc.blocks[-1], doc_id, sort_order)
+            # Calculate sort_order based on insertion position
+            new_block = next((b for b in new_doc.blocks if b.id == (op.block_id or op.id)), None)
+            if new_block:
+                if op.after_block_id:
+                    after_index = next(
+                        (i for i, b in enumerate(new_doc.blocks) if b.id == op.after_block_id), None
+                    )
+                    if after_index is not None:
+                        sort_order = await BlockRepository.get_sort_order_at_position(doc_id, after_index + 1)
+                    else:
+                        sort_order = await BlockRepository.get_next_sort_order(doc_id)
+                else:
+                    sort_order = await BlockRepository.get_next_sort_order(doc_id)
+                await BlockRepository.create(new_block, doc_id, sort_order)
         elif op.type == "delete_block":
             if op.block_id:
                 await BlockRepository.delete(op.block_id)

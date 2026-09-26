@@ -32,6 +32,10 @@ async def websocket_endpoint(ws: WebSocket, doc_id: str):
             raw = await ws.receive_json()
             msg_type = raw.get("type")
 
+            if msg_type == "cursor":
+                await ConnectionManager.broadcast_cursor(doc_id, client_id, raw)
+                continue
+
             if msg_type == "operation":
                 op = Operation.model_validate(raw.get("operation", raw))
             elif msg_type in _VALID_OPERATION_TYPES:

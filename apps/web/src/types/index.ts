@@ -42,6 +42,7 @@ export interface Operation {
   content: string | null
   length: number | null
   version: number
+  after_block_id?: string | null
 }
 
 export interface AckMessage {
@@ -77,4 +78,18 @@ export interface DocumentTitleUpdatedMessage {
   type: "document_title_updated"
   document_id: string
   title: string
+}
+
+export interface CursorMessage {
+  type: "cursor"
+  document_id: string
+  client_id: string
+  block_id: string
+  offset: number
+}
+
+export type RemoteCursor = {
+  clientId: string
+  blockId: string
+  offset: number
 }

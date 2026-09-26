@@ -4,6 +4,31 @@ export function buildJoinMessage(clientId: string): JoinMessage {
   return { type: "join", client_id: clientId }
 }
 
+export function buildOperation(
+  documentId: string,
+  clientId: string,
+  type: Operation["type"],
+  blockId: string | null,
+  position: number | null,
+  content: string | null,
+  version: number,
+  length?: number | null,
+  afterBlockId?: string | null
+): Operation {
+  return {
+    id: crypto.randomUUID(),
+    client_id: clientId,
+    document_id: documentId,
+    block_id: blockId,
+    type,
+    position,
+    content,
+    length: length ?? null,
+    version,
+    after_block_id: afterBlockId ?? null,
+  }
+}
+
 export function parseServerMessage(data: unknown): ServerMessage {
   const msg = data as Record<string, unknown>
   if (msg.type === "ack") {

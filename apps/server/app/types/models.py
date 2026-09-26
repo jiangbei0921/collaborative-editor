@@ -46,6 +46,9 @@ class Operation(BaseModel):
     content: Optional[str] = None
     length: Optional[int] = None
     version: int
+    # For create_block: block_id of the block after which to insert the new block
+    # If None, append at the end
+    after_block_id: Optional[str] = None
 
 
 class JoinMessage(BaseModel):
@@ -98,6 +101,14 @@ class DocumentTitleUpdatedMessage(BaseModel):
     title: str
 
 
+class CursorMessage(BaseModel):
+    type: Literal["cursor"] = "cursor"
+    document_id: str
+    client_id: str
+    block_id: str
+    offset: int
+
+
 WebSocketMessage = (
     JoinMessage
     | DocumentMessage
@@ -107,4 +118,5 @@ WebSocketMessage = (
     | ErrorMessage
     | PresenceMessage
     | DocumentTitleUpdatedMessage
+    | CursorMessage
 )

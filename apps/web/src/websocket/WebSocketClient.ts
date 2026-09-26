@@ -1,7 +1,8 @@
 import type { DocumentTitleUpdatedMessage, Operation, PresenceMessage, ServerMessage } from "../types"
 import { buildJoinMessage, parseDocument, parsePresenceMessage, parseServerMessage } from "./protocol"
 
-type MessageHandler = (msg: ServerMessage | Operation | PresenceMessage | DocumentTitleUpdatedMessage | { type: "document"; data: unknown }) => void
+type MessageHandler = (msg: ServerMessage | Operation | PresenceMessage | DocumentTitleUpdatedMessage | { type: "document"; data: unknown } | { type: "cursor"; client_id: string; block_id: string; offset: number }) => void
+type DisconnectHandler = () => void
 
 const MAX_RECONNECT_DELAY_MS = 10_000
 const ACK_TIMEOUT_MS = 5_000
@@ -20,6 +21,7 @@ export class WebSocketClient {
   private docId: string
   private handler: MessageHandler
   private onError?: (msg: string) => void
+  private onDisconnect?: DisconnectHandler
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempts = 0
   private pending: Operation[] = []
@@ -31,13 +33,15 @@ export class WebSocketClient {
     clientId: string,
     docId: string,
     handler: MessageHandler,
-    onError?: (msg: string) => void
+    onError?: (msg: string) => void,
+    onDisconnect?: DisconnectHandler
   ) {
     this.url = `${baseUrl}/ws/${docId}`
     this.clientId = clientId
     this.docId = docId
     this.handler = handler
     this.onError = onError
+    this.onDisconnect = onDisconnect
     this.connect()
   }
 
@@ -80,6 +84,13 @@ export class WebSocketClient {
           document_id: data.document_id as string,
           title: data.title as string,
         } as DocumentTitleUpdatedMessage)
+      } else if (data.type === "cursor") {
+        this.handler({
+          type: "cursor",
+          client_id: data.client_id as string,
+          block_id: data.block_id as string,
+          offset: data.offset as number,
+        })
       } else if (data.blocks !== undefined) {
         this.handler({ type: "document", data: parseDocument(data) })
       } else if (data.type === "ack" || data.type === "conflict") {
@@ -95,6 +106,9 @@ export class WebSocketClient {
         this.pending.push(pending.op)
       }
       this.sentPending.clear()
+
+      // Notify Editor.vue to reset hasPendingAck so queued ops can be resent after reconnect
+      this.onDisconnect?.()
 
       if (this._stopped) return
 
@@ -158,6 +172,17 @@ export class WebSocketClient {
     } else {
       this.pending.push(op)
     }
+  }
+
+  sendCursor(blockId: string, offset: number): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify({
+      type: "cursor",
+      document_id: this.docId,
+      client_id: this.clientId,
+      block_id: blockId,
+      offset,
+    }))
   }
 
   flush(): void {

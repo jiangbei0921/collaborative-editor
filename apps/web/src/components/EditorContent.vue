@@ -1,37 +1,50 @@
 <script setup lang="ts">
-import type { Block as BlockType } from "../types"
-import Block from "./Block.vue"
+import { computed } from "vue"
+import type { Block } from "../types"
+import BlockComponent from "./Block.vue"
 
-defineProps<{ blocks: BlockType[] }>()
+const props = defineProps<{ blocks: Block[] }>()
+
+const isDocumentEmpty = computed(
+  () => props.blocks.length === 1 && props.blocks[0].content === ""
+)
+
+function isFirstEmptyBlock(index: number): boolean {
+  return index === 0 && isDocumentEmpty.value
+}
 
 const emit = defineEmits<{
   insert: [blockId: string, position: number, text: string]
   delete: [blockId: string, position: number, length: number]
-  createBlock: []
+  createBlock: [newBlockId: string, suffix: string, currentBlockId: string]
   deleteBlock: [blockId: string]
   mergeUp: [blockId: string]
+  cursorChange: [blockId: string, offset: number]
 }>()
 </script>
 
 <template>
   <div class="editor-content">
-    <Block
-      v-for="block in blocks"
+    <BlockComponent
+      v-for="(block, index) in blocks"
       :key="block.id"
       :block="block"
-      @insert="(blockId: string, position: number, text: string) => emit('insert', blockId, position, text)"
-      @delete="(blockId: string, position: number, length: number) => emit('delete', blockId, position, length)"
-      @create-block="emit('createBlock')"
-      @delete-block="(blockId: string) => emit('deleteBlock', blockId)"
-      @merge-up="(blockId: string) => emit('mergeUp', blockId)"
+      :is-document-empty="isFirstEmptyBlock(index)"
+      @insert="(id: string, pos: number, text: string) => emit('insert', id, pos, text)"
+      @delete="(id: string, pos: number, len: number) => emit('delete', id, pos, len)"
+      @create-block="(newBlockId: string, suffix: string, currentBlockId: string) => emit('createBlock', newBlockId, suffix, currentBlockId)"
+      @delete-block="(id: string) => emit('deleteBlock', id)"
+      @merge-up="(id: string) => emit('mergeUp', id)"
+      @cursor-change="(id: string, offset: number) => emit('cursorChange', id, offset)"
     />
   </div>
 </template>
 
 <style scoped>
 .editor-content {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 16px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4) 0;
 }
 </style>

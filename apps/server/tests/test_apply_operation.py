@@ -138,11 +138,12 @@ class TestCreateBlock:
         assert result.blocks[0].id == "b2"
         assert result.blocks[0].type == "bullet"
 
-    def test_create_block_requires_content(self):
+    def test_create_block_uses_default_type_when_content_none(self):
         doc = make_doc()
         op = make_op("op1", "create_block", content=None)
-        with pytest.raises(ValueError, match="requires content"):
-            apply_operation(doc, op)
+        result = apply_operation(doc, op)
+        assert result.blocks[0].type == "paragraph"
+        assert result.blocks[0].id == "op1"
 
 
 class TestDeleteBlock:

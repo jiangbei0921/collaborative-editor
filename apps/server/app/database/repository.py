@@ -111,6 +111,24 @@ class BlockRepository:
             row = await cursor.fetchone()
         return (row[0] or 0) + 1
 
+    @staticmethod
+    async def get_sort_order_at_position(doc_id: str, position: int) -> int:
+        """Get a sort_order value that places a block at the given position."""
+        conn = await get_connection()
+        # Get sort_order of blocks around the insertion point
+        async with conn.execute(
+            "SELECT sort_order FROM blocks WHERE document_id = ? ORDER BY sort_order LIMIT ? OFFSET ?",
+            (doc_id, 2, max(0, position - 1)),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        
+        if not rows:
+            return 1
+        if len(rows) == 1:
+            return rows[0][0] + 1
+        # Insert between two existing blocks
+        return (rows[0][0] + rows[1][0]) // 2
+
 
 class OperationRepository:
     @staticmethod

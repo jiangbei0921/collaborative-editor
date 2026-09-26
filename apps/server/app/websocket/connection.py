@@ -1,8 +1,12 @@
+import logging
+
 from fastapi import WebSocket
 
 from app.document.service import DocumentService
 from app.operation.manager import OperationManager
-from app.types.models import Document, Operation, WebSocketMessage
+from app.types.models import Document, DocumentMessage, Operation, WebSocketMessage
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
@@ -24,7 +28,8 @@ class ConnectionManager:
             await ws.send_json({"type": "error", "reason": f"Document '{doc_id}' not found"})
             await ws.close()
             raise ValueError(f"Document '{doc_id}' not found")
-        await ws.send_json(doc.model_dump())
+        msg = DocumentMessage(document=doc)
+        await ws.send_json(msg.model_dump())
         return doc
 
     @classmethod
@@ -48,6 +53,16 @@ class ConnectionManager:
         for client_id, ws in doc_conns.items():
             if client_id != sender_id:
                 await ws.send_json(data)
+
+    @classmethod
+    async def broadcast_cursor(cls, doc_id: str, sender_id: str, data: dict) -> None:
+        doc_conns = cls._get_doc_connections(doc_id)
+        for client_id, ws in doc_conns.items():
+            if client_id != sender_id:
+                try:
+                    await ws.send_json(data)
+                except Exception:
+                    logger.warning("broadcast_cursor failed for %s in doc %s", client_id, doc_id, exc_info=True)
 
     @classmethod
     def get_online_users(cls, doc_id: str) -> list[str]:

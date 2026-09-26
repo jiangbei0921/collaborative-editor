@@ -1,230 +1,471 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue"
-import { useRouter } from "vue-router"
-import { EditorState } from "../editor/EditorState"
-import { WebSocketClient } from "../websocket/WebSocketClient"
-import { useEditorStore } from "../state/useEditorStore"
+import { onMounted, onUnmounted, ref, watch, nextTick } from "vue"
+import { useRoute, useRouter } from "vue-router"
+import type { Block, Document, Operation } from "../types"
 import { useConnectionStore } from "../state/useConnectionStore"
 import { usePresenceStore } from "../state/usePresenceStore"
-import { DEFAULT_DOCUMENT_TITLE, normalizeTitle } from "../types"
-import type { Block } from "../types"
+import { useCursorStore } from "../state/useCursorStore"
+import { WebSocketClient } from "../websocket/WebSocketClient"
+import { buildOperation } from "../websocket/protocol"
 import EditorHeader from "./EditorHeader.vue"
 import EditorContent from "./EditorContent.vue"
 
-const props = defineProps<{
-  docId: string
-  clientId: string
-  wsBaseUrl: string
-}>()
-
+const route = useRoute()
 const router = useRouter()
-const { blocks, init, syncBlocks, getEditor } = useEditorStore()
-const { status, setStatus, setError, setDocumentNotFound } = useConnectionStore()
+const docId = route.params.docId as string
+const clientId = crypto.randomUUID()
+
+const { status, error, setStatus, setError } = useConnectionStore()
 const { setOnlineUsers } = usePresenceStore()
+const { setCursor, removeCursor, clearCursors } = useCursorStore()
 
-const docTitle = ref(DEFAULT_DOCUMENT_TITLE)
-
-let editor: EditorState
-let wsClient: WebSocketClient
-
-onMounted(() => {
-  setStatus("connecting")
-
-  editor = new EditorState(props.clientId, {
-    onDocumentChange: (doc) => syncBlocks(doc),
-    onConflict: (reason) => setError(reason),
-  })
-
-  wsClient = new WebSocketClient(
-    props.wsBaseUrl,
-    props.clientId,
-    props.docId,
-    async (msg) => {
-      if ("type" in msg && msg.type === "presence") {
-        setOnlineUsers(msg.users)
-        return
-      }
-      if ("type" in msg && msg.type === "document_title_updated") {
-        docTitle.value = normalizeTitle(msg.title)
-        return
-      }
-      if ("type" in msg && msg.type === "document") {
-        setStatus("connected")
-        const data = msg.data as { id: string; title: string; version: number; blocks: Block[]; updated_at: number }
-        docTitle.value = data.title || DEFAULT_DOCUMENT_TITLE
-        editor.replaceDocument({
-          id: data.id,
-          title: data.title || DEFAULT_DOCUMENT_TITLE,
-          version: data.version,
-          blocks: data.blocks,
-          updated_at: data.updated_at,
-        })
-        if (editor.document.blocks.length === 0) {
-          editor.createBlock("paragraph")
-        }
-        syncBlocks(editor.document)
-        return
-      }
-      await editor.handleServerMessage(msg)
-      syncBlocks(editor.document)
-    },
-    (err) => {
-      if (err.startsWith("document_not_found:")) {
-        setDocumentNotFound(err)
-      } else {
-        setError(err)
-      }
-    }
-  )
-
-  editor.attachWsClient(wsClient)
-  init(editor)
-})
-
-onUnmounted(() => {
-  wsClient?.disconnect()
-})
+const ws = ref<WebSocketClient | null>(null)
+const docTitle = ref("")
+const blocks = ref<Block[]>([])
+const version = ref(0)
+const pendingOps = ref<Operation[]>([])
+const conflictOps = ref<Set<string>>(new Set())
 
 function goHome(): void {
   router.push("/")
 }
 
 function createNewDoc(): void {
-  router.push("/")
+  router.push("/new")
 }
 
-async function updateTitle(title: string): Promise<void> {
-  docTitle.value = title
+async function updateTitle(newTitle: string): Promise<void> {
+  const trimmed = newTitle.trim()
+  if (!trimmed || trimmed === docTitle.value) return
+
   try {
-    await fetch(`/api/documents/${props.docId}/title`, {
+    const res = await fetch(`/api/documents/${docId}/title`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title: trimmed }),
     })
-  } catch {
-    // silently fail, title will be updated on next page load
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+    const data = await res.json()
+    if (data.status === "updated") {
+      docTitle.value = data.title || trimmed
+    } else if (data.status === "not_found") {
+      throw new Error("Document not found")
+    }
+  } catch (err) {
+    setError(`标题更新失败: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
 function handleInsert(blockId: string, position: number, text: string): void {
-  getEditor()?.insertText(blockId, position, text)
+  const op = buildOperation(docId, clientId, "insert", blockId, position, text, 0)
+  pendingOps.value.push(op)
+  trySendNext()
 }
 
 function handleDelete(blockId: string, position: number, length: number): void {
-  getEditor()?.deleteText(blockId, position, length)
+  const op = buildOperation(docId, clientId, "delete", blockId, position, null, 0, length)
+  pendingOps.value.push(op)
+  trySendNext()
 }
 
-function handleCreateBlock(): void {
-  getEditor()?.createBlock("paragraph")
+function handleCreateBlock(newBlockId: string, suffix: string, currentBlockId: string): void {
+  // 1. 找到当前 Block 的索引，在其后插入新 Block
+  const currentIndex = blocks.value.findIndex((b) => b.id === currentBlockId)
+  const insertIndex = currentIndex >= 0 ? currentIndex + 1 : blocks.value.length
+
+  // 2. 先在本地添加新 Block（乐观更新），避免等待 ACK 时无法输入
+  if (!blocks.value.some((b) => b.id === newBlockId)) {
+    blocks.value.splice(insertIndex, 0, { id: newBlockId, type: "paragraph", content: "" })
+  }
+
+  // 3. 创建 create_block Operation，使用客户端生成的 Block ID，并指定 after_block_id
+  const op = buildOperation(docId, clientId, "create_block", newBlockId, null, "paragraph", 0, null, currentBlockId)
+  pendingOps.value.push(op)
+  trySendNext()
+
+  // 4. 如果有 suffix，创建 insert Operation 到新 Block
+  if (suffix) {
+    const insertOp = buildOperation(docId, clientId, "insert", newBlockId, 0, suffix, 0)
+    pendingOps.value.push(insertOp)
+    trySendNext()
+  }
+
+  // 5. 自动聚焦新 Block
+  nextTick(() => {
+    const newBlockEl = document.querySelector(`[data-block-id="${newBlockId}"] .block-content`) as HTMLElement | null
+    if (newBlockEl) {
+      newBlockEl.focus()
+      const range = document.createRange()
+      const sel = window.getSelection()
+      if (sel) {
+        range.setStart(newBlockEl.firstChild || newBlockEl, 0)
+        range.collapse(true)
+        sel.removeAllRanges()
+        sel.addRange(range)
+      }
+    }
+  })
 }
 
 function handleDeleteBlock(blockId: string): void {
-  getEditor()?.deleteBlock(blockId)
+  const op = buildOperation(docId, clientId, "delete_block", blockId, null, null, 0)
+  pendingOps.value.push(op)
+  trySendNext()
+}
+
+let hasPendingAck = false
+
+function trySendNext(): void {
+  if (hasPendingAck || pendingOps.value.length === 0 || !ws.value) return
+  const op = pendingOps.value[0]
+  op.version = version.value + 1
+  hasPendingAck = true
+  ws.value.send(op)
 }
 
 function handleMergeUp(blockId: string): void {
-  const ed = getEditor()
-  if (!ed) return
-  const idx = ed.document.blocks.findIndex((b) => b.id === blockId)
-  if (idx <= 0) return
-  const prev = ed.document.blocks[idx - 1]
-  const cur = ed.document.blocks[idx]
-  ed.deleteBlock(blockId)
-  ed.insertText(prev.id, prev.content.length, cur.content)
+  const index = blocks.value.findIndex((b) => b.id === blockId)
+  if (index <= 0) return
+  const prev = blocks.value[index - 1]
+  const current = blocks.value[index]
+  const text = current.content
+  const position = prev.content.length
+  handleDelete(blockId, 0, text.length)
+  handleInsert(prev.id, position, text)
+  handleDeleteBlock(blockId)
 }
+
+function handleCursorChange(blockId: string, offset: number): void {
+  ws.value?.sendCursor(blockId, offset)
+}
+
+function handleMessage(msg: unknown): void {
+  const m = msg as Record<string, unknown>
+
+  if (m.type === "document") {
+    const doc = (m.document ?? m.data) as Document
+    docTitle.value = doc.title
+    blocks.value = doc.blocks
+    version.value = doc.version
+    pendingOps.value = []
+    hasPendingAck = false
+    setStatus("connected")
+    return
+  }
+
+  if (m.type === "cursor") {
+    setCursor(m.client_id as string, m.block_id as string, m.offset as number)
+    return
+  }
+
+  if (m.type === "presence") {
+    const prevUsers = usePresenceStore().onlineUsers.value
+    const nextUsers = (m.users as string[]) ?? []
+    setOnlineUsers(nextUsers)
+    for (const userId of prevUsers) {
+      if (!nextUsers.includes(userId)) {
+        removeCursor(userId)
+      }
+    }
+    return
+  }
+
+  if (m.type === "document_title_updated") {
+    docTitle.value = m.title as string
+    return
+  }
+
+  if (m.type === "ack" || m.type === "conflict") {
+    if (m.type === "ack") {
+      version.value = m.version as number
+      if (pendingOps.value.length > 0 && pendingOps.value[0].id === (m.operation_id as string)) {
+        pendingOps.value.shift()
+      }
+      hasPendingAck = false
+      trySendNext()
+    } else {
+      conflictOps.value.add(m.operation_id as string)
+      setError(`Conflict: ${m.reason as string}`)
+      pendingOps.value = []
+      hasPendingAck = false
+    }
+    return
+  }
+
+  const op = m as unknown as Operation
+  if (op.type === "insert" && op.block_id && op.content !== null && op.position !== null) {
+    const block = blocks.value.find((b) => b.id === op.block_id)
+    if (block) {
+      block.content =
+        block.content.slice(0, op.position) + op.content + block.content.slice(op.position)
+    }
+  }
+  if (op.type === "delete" && op.block_id && op.length !== null && op.position !== null) {
+    const block = blocks.value.find((b) => b.id === op.block_id)
+    if (block) {
+      block.content =
+        block.content.slice(0, op.position) + block.content.slice(op.position + op.length)
+    }
+  }
+  if (op.type === "create_block") {
+    const remoteBlockId = op.block_id || op.id
+    const blockType = (op.content as Block["type"]) || "paragraph"
+    if (!blocks.value.some((b) => b.id === remoteBlockId)) {
+      // Insert at correct position based on after_block_id
+      if (op.after_block_id) {
+        const afterIndex = blocks.value.findIndex((b) => b.id === op.after_block_id)
+        if (afterIndex >= 0) {
+          blocks.value.splice(afterIndex + 1, 0, { id: remoteBlockId, type: blockType, content: "" })
+        } else {
+          blocks.value.push({ id: remoteBlockId, type: blockType, content: "" })
+        }
+      } else {
+        blocks.value.push({ id: remoteBlockId, type: blockType, content: "" })
+      }
+    }
+  }
+  if (op.type === "delete_block" && op.block_id) {
+    blocks.value = blocks.value.filter((b) => b.id !== op.block_id)
+  }
+  if (op.type === "update_block" && op.block_id && op.content !== null) {
+    const block = blocks.value.find((b) => b.id === op.block_id)
+    if (block) block.content = op.content
+  }
+  if (op.version !== undefined) {
+    version.value = op.version
+  }
+}
+
+function handleError(msg: string): void {
+  if (msg.startsWith("document_not_found:")) {
+    setStatus("document_not_found")
+    setError(msg.replace("document_not_found:", ""))
+    return
+  }
+  setStatus("disconnected")
+  setError(msg)
+}
+
+function handleDisconnect(): void {
+  hasPendingAck = false
+}
+
+onMounted(() => {
+  setStatus("connecting")
+  ws.value = new WebSocketClient(
+    import.meta.env.VITE_WS_URL || "ws://localhost:8000",
+    clientId,
+    docId,
+    handleMessage,
+    handleError,
+    handleDisconnect
+  )
+})
+
+onUnmounted(() => {
+  ws.value?.disconnect()
+  clearCursors()
+})
+
+watch(
+  () => route.params.docId,
+  (newId) => {
+    if (newId !== docId) {
+      ws.value?.disconnect()
+      clearCursors()
+      setStatus("connecting")
+      ws.value = new WebSocketClient(
+        import.meta.env.VITE_WS_URL || "ws://localhost:8000",
+        clientId,
+        newId as string,
+        handleMessage,
+        handleError,
+        handleDisconnect
+      )
+    }
+  }
+)
 </script>
 
 <template>
   <div v-if="status === 'document_not_found'" class="error-screen">
     <div class="error-card">
+      <div class="error-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 8v4M12 16h.01" />
+        </svg>
+      </div>
       <h2>文档不存在</h2>
-      <p>请检查文档链接是否正确。</p>
+      <p>请检查文档链接是否正确，或创建一个新文档。</p>
       <div class="error-actions">
         <button class="btn-primary" @click="goHome">返回首页</button>
         <button class="btn-secondary" @click="createNewDoc">新建文档</button>
       </div>
     </div>
   </div>
-  <div v-else class="editor">
-    <EditorHeader :doc-id="docId" :title="docTitle" @update:title="updateTitle" />
-    <EditorContent
-      :blocks="blocks"
-      @insert="handleInsert"
-      @delete="handleDelete"
-      @create-block="handleCreateBlock"
-      @delete-block="handleDeleteBlock"
-      @merge-up="handleMergeUp"
+
+  <div v-else class="editor-layout">
+    <EditorHeader
+      :doc-id="docId"
+      :title="docTitle"
+      @update:title="updateTitle"
     />
+
+    <main class="editor-main">
+      <div class="editor-canvas">
+        <div v-if="status === 'connecting'" class="loading-state">
+          <div class="loading-spinner" />
+          <p>正在连接文档…</p>
+        </div>
+
+        <template v-else>
+          <EditorContent
+            :blocks="blocks"
+            @insert="handleInsert"
+            @delete="handleDelete"
+            @create-block="(newBlockId: string, suffix: string, currentBlockId: string) => handleCreateBlock(newBlockId, suffix, currentBlockId)"
+            @delete-block="handleDeleteBlock"
+            @merge-up="handleMergeUp"
+            @cursor-change="handleCursorChange"
+          />
+        </template>
+      </div>
+    </main>
   </div>
 </template>
 
 <style scoped>
+.editor-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.editor-main {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-6) var(--space-4);
+}
+
+.editor-canvas {
+  width: 100%;
+  max-width: var(--editor-max-width);
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-8) var(--space-10);
+  min-height: 60vh;
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-16) 0;
+  color: var(--text-secondary);
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .error-screen {
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: #fafafa;
+  background: var(--bg);
+  padding: var(--space-4);
 }
 
 .error-card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-10) var(--space-12);
   text-align: center;
-  padding: 48px 32px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  max-width: 400px;
-  width: 90%;
+  max-width: 440px;
+  width: 100%;
+}
+
+.error-icon {
+  color: var(--text-tertiary);
+  margin-bottom: var(--space-4);
 }
 
 .error-card h2 {
-  margin: 0 0 8px;
   font-size: 20px;
-  color: #1a1a1a;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: var(--space-2);
 }
 
 .error-card p {
-  margin: 0 0 24px;
   font-size: 14px;
-  color: #666;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-6);
+  line-height: 1.6;
 }
 
 .error-actions {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   justify-content: center;
 }
 
-.btn-primary {
+.btn-primary,
+.btn-secondary {
   padding: 8px 20px;
+  border-radius: var(--radius-md);
   font-size: 14px;
-  border: none;
-  background: #1976d2;
-  color: #fff;
-  border-radius: 6px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
+.btn-primary {
+  background: var(--primary);
+  color: var(--text-inverse);
+  border: none;
+}
 .btn-primary:hover {
-  background: #1565c0;
+  background: var(--primary-hover);
 }
 
 .btn-secondary {
-  padding: 8px 20px;
-  font-size: 14px;
-  border: 1px solid #ccc;
-  background: #fff;
-  color: #333;
-  border-radius: 6px;
-  cursor: pointer;
+  background: var(--surface-hover);
+  color: var(--text);
+  border: 1px solid var(--border);
 }
-
 .btn-secondary:hover {
-  background: #f5f5f5;
+  background: var(--surface-active);
 }
 
-.editor {
-  min-height: 100vh;
-  background: #fff;
+@media (max-width: 768px) {
+  .editor-main {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .editor-canvas {
+    padding: var(--space-6) var(--space-5);
+  }
 }
 </style>
