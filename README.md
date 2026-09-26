@@ -1,6 +1,6 @@
 # Collaborative Editor
 
-> 基于 Vue 3 + FastAPI + WebSocket + SQLite 的实时协同 Block 编辑器。
+基于 Vue 3 + FastAPI + WebSocket + SQLite 的实时协同 Block 编辑器。
 
 🔗 **在线 Demo**：[https://collaborative-editor-wpju.onrender.com](https://collaborative-editor-wpju.onrender.com)
 
@@ -23,22 +23,26 @@
 
 - Block 级编辑（paragraph / heading / bullet / quote / code）
 - DOM / contenteditable 原生编辑体验
-- 创建 Block
-- 修改 Block
+- Enter 创建新 Block
+- Enter 中间拆分 Block
+- Shift + Enter 当前 Block 内换行
+- Placeholder 提示
 - 删除 Block
 
 ### 实时协同
 
 - WebSocket 实时通信
 - Operation 原子操作同步
+- Server Authoritative 服务端权威
 - Version Checking 版本校验
 - ACK 确认机制
-- Idempotency 幂等去重
+- 幂等去重
 - Retry 超时重试
 - Reconnect 断线重连
 - Pending Operations 暂存与重发
 - Conflict Recovery 冲突恢复
 - Online Users / Presence 在线用户显示
+- Remote Cursor 远程光标
 
 ### 文档管理
 
@@ -48,6 +52,7 @@
 - 标题实时同步
 - 标题持久化
 - 分享链接（复制 ID 或完整链接）
+- Help Modal 帮助说明
 
 ---
 
@@ -55,7 +60,8 @@
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | Vue 3, TypeScript, Vite, contenteditable |
+| 前端 | Vue 3, TypeScript, Vite |
+| 编辑器 | DOM / contenteditable |
 | 后端 | FastAPI, Python 3.12 |
 | 通信 | WebSocket（原生，前端自动 wss://） |
 | 存储 | SQLite（aiosqlite 异步驱动） |
@@ -66,39 +72,23 @@
 
 ## 系统架构
 
-```
-Browser                         Browser
-   │                                │
-   │  WebSocket (wss://)            │  WebSocket (wss://)
-   │                                │
-   ▼                                ▼
-┌──────────────────────────────────────────┐
-│               FastAPI                     │
-│  ┌──────────────────────────────────┐     │
-│  │       ConnectionManager          │     │
-│  │   连接管理 / 在线用户 / 广播      │     │
-│  └──────────────┬───────────────────┘     │
-│                 ▼                         │
-│  ┌──────────────────────────────────┐     │
-│  │        OperationManager          │     │
-│  │   版本校验 / 冲突检测 / 加锁      │     │
-│  │   幂等去重 / ACK 生成            │     │
-│  └──────────────┬───────────────────┘     │
-│                 ▼                         │
-│  ┌──────────────────────────────────┐     │
-│  │   DocumentManager / Service      │     │
-│  │   apply_operation / 文档缓存      │     │
-│  └──────────────┬───────────────────┘     │
-│                 ▼                         │
-│  ┌──────────────────────────────────┐     │
-│  │           Repository             │     │
-│  │   documents / blocks / ops CRUD  │     │
-│  └──────────────┬───────────────────┘     │
-│                 ▼                         │
-│  ┌──────────────────────────────────┐     │
-│  │            SQLite                │     │
-│  └──────────────────────────────────┘     │
-└──────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[Browser A]
+    B[Browser B]
+
+    A --> FE[Vue 3 + TypeScript<br/>Block Editor]
+    B --> FE2[Vue 3 + TypeScript<br/>Block Editor]
+
+    FE -->|WebSocket| WS[FastAPI WebSocket]
+    FE2 -->|WebSocket| WS
+
+    WS --> OM[Operation Manager]
+    OM --> VC[Version Checking]
+    VC --> DB[(SQLite)]
+
+    OM -->|ACK| FE
+    OM -->|Broadcast| FE2
 ```
 
 **协同流程**：客户端构建 Operation（version = doc.version + 1）→ WebSocket 发送 → OperationManager 校验版本 → 幂等检查 → apply → 返回 ACK → 广播给同文档其他客户端。
@@ -118,13 +108,13 @@ Browser                         Browser
 - `applied`：操作已成功应用到文档
 - `duplicate`：该操作已处理过（幂等去重）
 
-### Idempotency
+### 幂等去重
 
 每个 Operation 有唯一 ID（UUID）。服务端将已处理的 operation 持久化到 `operations` 表，收到重复 operation 时返回 duplicate ACK，不会重复应用到文档。
 
 ### Retry
 
-客户端发送 Operation 后启动 ACK 超时定时器（5s 基础）。超时未收到 ACK 则重发，指数退避（5s → 10s → 20s），最多重试 3 次。Operation ID 在重试过程中保持不变，服务端通过 Idempotency 保证不会重复应用。
+客户端发送 Operation 后启动 ACK 超时定时器（5s）。超时未收到 ACK 则重发，指数退避（1s → 2s → 4s → 8s → 10s），最多重试 3 次。Operation ID 在重试过程中保持不变，服务端通过幂等去重保证不会重复应用。
 
 ### Reconnect
 
@@ -139,6 +129,10 @@ WebSocket 断开后自动重连，间隔 1s → 2s → 4s → 8s → 10s（上�
 ### Presence
 
 同一 Document 内维护在线用户列表。用户加入 / 离开时，ConnectionManager 广播完整在线用户列表到同文档所有客户端。前端 `OnlineUsers` 组件实时显示。
+
+### Cursor
+
+客户端光标位置变化时，通过 WebSocket 发送 cursor 消息，服务端广播给同文档其他客户端，前端 `RemoteCursors` 组件渲染远程光标位置。
 
 ---
 
@@ -160,8 +154,9 @@ collaborative-editor/
 │   └── web/                 # Vue 3 前端
 │       ├── src/
 │       │   ├── components/  # Editor, EditorHeader, OnlineUsers 等组件
-│       │   ├── editor/      # EditorState 状态管理
-│       │   ├── state/       # useEditorStore, usePresenceStore
+│       │   ├── editor/      # EditorState, applyOperation, block, document, operation
+│       │   ├── state/       # useConnectionStore, usePresenceStore, useCursorStore
+│       │   ├── utils/       # id, version, websocketUrl
 │       │   ├── websocket/   # WebSocketClient（连接 + 重连 + 重试）
 │       │   └── types/       # TypeScript 类型定义
 │       └── package.json
@@ -194,6 +189,10 @@ npm run dev
 
 前端：`http://localhost:5173`，后端：`http://localhost:8000`。
 
+Vite 开发服务器已配置代理：
+- `/api` → `http://127.0.0.1:8000`
+- `/ws` → `ws://127.0.0.1:8000`
+
 ### 方式二：Docker
 
 ```bash
@@ -211,7 +210,7 @@ docker compose up -d
 - **Dockerfile**：Node 20 构建前端 → Python 3.12-slim 运行后端
 - **静态文件**：FastAPI 托管 Vue dist 目录
 - **端口**：通过 `PORT` 环境变量配置（线上为 Render 注入）
-- **WebSocket**：前端自动根据 `https://` 切换 `wss://`
+- **WebSocket**：前端自动根据页面协议切换 `wss://` / `ws://`
 - **健康检查**：`GET /health` → 200
 - **数据库**：SQLite，数据路径 `/app/data/editor.db`
 
@@ -262,5 +261,4 @@ npm run build       # vue-tsc 类型检查 + vite build
 - 用户认证与权限控制
 - 历史版本与回退
 - Undo / Redo
-- Cursor 同步
 - Slash Menu & Formatting Toolbar
